@@ -22,6 +22,7 @@ export const config = {
   root,
   port: Number(process.env.PORT || 8787),
   apiKey: process.env.API_KEY || '', // protects this wrapper's own HTTP endpoints when set
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, ''), // e.g. http://host:3003 (optional; auto-detected from request otherwise)
   sessionFile: resolve(process.env.SESSION_FILE || './secrets/session.json'),
   downloadDir: resolve(process.env.DOWNLOAD_DIR || './downloads'),
   defaultFormat: (process.env.DEFAULT_FORMAT || 'wav').toLowerCase(),

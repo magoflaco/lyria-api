@@ -112,29 +112,38 @@ npm start        # listens on PORT (default 8787)
 | Method & path | Body / query | Returns |
 |---|---|---|
 | `GET /health` | — | service + session status (no auth) |
-| `POST /generate` | `{ prompt, format?, download?, uploads? }` | title, `conversation_id`, clips (+ files) |
-| `POST /edit` | `{ conversation_id, current_song_id?, operation?, prompt?, format?, download? }` | edited clip(s) |
-| `GET /clips/:id` | — | clip metadata |
-| `GET /clips/:id/audio` | `?format=mp3\|wav\|m4a` | streams/redirects the audio |
-| `POST /download` | `{ clip_ids:[...], format? }` | saved file paths |
+| `POST /generate` | `{ prompt, format?, uploads? }` | **the audio** (see below) |
+| `POST /edit` | `{ conversation_id, current_song_id?, operation?, prompt?, format? }` | **the audio** (see below) |
+| `GET /clips/:id` | — | clip metadata + download links (JSON) |
+| `GET /clips/:id/audio` | `?format=mp3\|wav\|m4a` | streams one clip's audio |
 | `POST /upload/image` | multipart field `image` | `{ id, url, kind, media_type, name }` |
 | `POST /upload/audio` | multipart field `audio` | `{ id, url, kind, media_type, name }` |
+
+**`/generate` and `/edit` return the audio directly to the caller:**
+- `format` is `mp3 | wav | m4a`; if omitted it defaults to `DEFAULT_FORMAT` (wav).
+- **1 clip →** the audio file itself (`Content-Type: audio/*`, `Content-Disposition: attachment`).
+- **N clips** (the Producer sometimes makes several variations) **→** a `multipart/mixed`
+  response with one audio file per variation.
+- The `conversation_id`, clip ids and title come back in the `X-Conversation-Id`,
+  `X-Clip-Ids` and `X-Title` response headers, so you can keep editing.
 
 `operation` ∈ `variation | extend | remix | cover` (optionally refined with a
 `prompt`), or omit `operation` and pass a free-form `prompt` for any tweak.
 
-**Generate:**
+**Generate (save the song):**
 ```bash
 curl -X POST http://localhost:8787/generate \
   -H 'content-type: application/json' \
-  -d '{"prompt":"funky disco groove, wah guitar, 118 bpm, instrumental","format":"mp3","download":true}'
+  -d '{"prompt":"funky disco groove, wah guitar, 118 bpm, instrumental","format":"mp3"}' \
+  -OJ   # -OJ makes curl honor the attachment filename
 ```
 
-**Edit (remix):**
+**Edit (remix) — reuse the conversation id from a previous call:**
 ```bash
 curl -X POST http://localhost:8787/edit \
   -H 'content-type: application/json' \
-  -d '{"conversation_id":"…","current_song_id":"…","operation":"remix","prompt":"drum and bass","format":"mp3","download":true}'
+  -d '{"conversation_id":"…","current_song_id":"…","operation":"remix","prompt":"drum and bass","format":"wav"}' \
+  -OJ
 ```
 
 **Build from an uploaded image (inspiration):**
@@ -143,7 +152,7 @@ curl -X POST http://localhost:8787/edit \
 REF=$(curl -s -X POST http://localhost:8787/upload/image -F image=@cover.jpg)
 # 2) pass it in `uploads`
 curl -X POST http://localhost:8787/generate -H 'content-type: application/json' \
-  -d "{\"prompt\":\"a track inspired by this image\",\"uploads\":[$REF]}"
+  -d "{\"prompt\":\"a track inspired by this image\",\"uploads\":[$REF],\"format\":\"mp3\"}" -OJ
 ```
 Audio works the same way via `POST /upload/audio` (source clip must be under ~4 min).
 
@@ -151,8 +160,8 @@ Set `API_KEY` in `.env` to require `Authorization: Bearer <API_KEY>` on every
 endpoint except `/health`.
 
 ### Formats
-- **wav** and **m4a** are served straight from public Google Cloud Storage (fast, no auth).
-- **mp3** is transcoded on demand through the authenticated endpoint.
+- **wav** and **m4a** originate from public Google Cloud Storage; **mp3** is
+  transcoded on demand. The API streams all three back to the caller.
 
 ### Variations
 The Producer decides how many variations to make (usually 1–2, sometimes more).
