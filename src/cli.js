@@ -6,7 +6,7 @@
 //   node src/cli.js session                 # show session status / force refresh check
 
 import { FlowClient } from './client/flowClient.js';
-import { generateSong } from './services/generate.js';
+import { generateSong, editSong, editOperation } from './services/generate.js';
 import { downloadClips, downloadClip } from './services/download.js';
 import { defaultSession } from './auth/session.js';
 import { config } from './config.js';
@@ -19,7 +19,9 @@ function parseFlags(args) {
     if (a === '--format') flags.format = args[++i];
     else if (a === '--no-download') flags.noDownload = true;
     else if (a === '--dir') flags.dir = args[++i];
-    else if (a === '--variations') flags.variations = Number(args[++i]);
+    else if (a === '--song') flags.song = args[++i];
+    else if (a === '--op' || a === '--operation') flags.operation = args[++i];
+    else if (a === '--prompt') flags.prompt = args[++i];
     else rest.push(a);
   }
   return { flags, rest };
@@ -30,18 +32,15 @@ async function cmdGenerate(args) {
   const prompt = rest.join(' ').trim();
   if (!prompt) throw new Error('Usage: cli.js generate "<prompt>" [--format wav|m4a] [--no-download]');
   const format = flags.format || config.defaultFormat;
-  const variations = flags.variations ?? 2;
 
   console.log(`\n🎵  Prompt: ${prompt}`);
-  console.log(`⏳  Generating ${variations} variation(s) (this takes ~30-60s each)...`);
+  console.log('⏳  Generating (this takes ~30-60s)...');
 
   const result = await generateSong(prompt, {
-    variations,
-    onGeneration: ({ have, want }) => process.stdout.write(`\r   generated ${have}/${want} clips...      `),
     onProgress: ({ ready, total }) => process.stdout.write(`\r   rendered ${ready}/${total} clips        `),
   });
 
-  console.log(`\n✅  "${result.title || 'Untitled'}" — ${result.clips.length} variations`);
+  console.log(`\n✅  "${result.title || 'Untitled'}" — ${result.clips.length} variation(s)  [conversation ${result.conversationId}]`);
   for (const c of result.clips) {
     const dur = c.duration?.value ? `${Math.round(Number(c.duration.value))}s` : '?';
     console.log(`    • ${c.id}  (${dur})  ${c.title || ''}`);
@@ -57,6 +56,35 @@ async function cmdGenerate(args) {
   for (const f of files) {
     console.log(`    ✔ ${f.path}  (${(f.bytes / 1e6).toFixed(2)} MB)`);
   }
+}
+
+async function cmdEdit(args) {
+  const { flags, rest } = parseFlags(args);
+  const conversationId = rest[0];
+  if (!conversationId) {
+    throw new Error(
+      'Usage: cli.js edit <conversationId> --song <clipId> [--op variation|extend|remix|cover] [--prompt "..."] [--format wav|mp3|m4a]'
+    );
+  }
+  const format = flags.format || config.defaultFormat;
+  const op = flags.operation;
+  const prompt = flags.prompt || rest.slice(1).join(' ').trim() || undefined;
+
+  console.log(`\n✏️   Editing in conversation ${conversationId}${op ? ` (${op})` : ''}`);
+  console.log('⏳  Working (this takes ~30-60s)...');
+
+  const doEdit = op
+    ? editOperation(op, { conversationId, currentSongId: flags.song, prompt })
+    : editSong({ conversationId, currentSongId: flags.song, prompt });
+  const result = await doEdit;
+
+  console.log(`\n✅  "${result.title || 'Untitled'}" — ${result.clips.length} clip(s)`);
+  for (const c of result.clips) console.log(`    • ${c.id}  ${c.title || ''}`);
+
+  if (flags.noDownload) return;
+  console.log(`\n⬇️   Downloading ${format.toUpperCase()} to ${flags.dir || config.downloadDir} ...`);
+  const files = await downloadClips(result.clips, { format, dir: flags.dir });
+  for (const f of files) console.log(`    ✔ ${f.path}  (${(f.bytes / 1e6).toFixed(2)} MB)`);
 }
 
 async function cmdDownload(args) {
@@ -91,10 +119,11 @@ async function main() {
   const [cmd, ...args] = process.argv.slice(2);
   switch (cmd) {
     case 'generate': return cmdGenerate(args);
+    case 'edit': return cmdEdit(args);
     case 'download': return cmdDownload(args);
     case 'session': return cmdSession();
     default:
-      console.log('Commands: generate | download | session');
+      console.log('Commands: generate | edit | download | session');
       process.exit(cmd ? 1 : 0);
   }
 }

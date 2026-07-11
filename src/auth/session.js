@@ -40,7 +40,37 @@ export class SessionManager {
 
   async persist() {
     await fsp.mkdir(path.dirname(this.sessionFile), { recursive: true });
-    await fsp.writeFile(this.sessionFile, JSON.stringify(this.session, null, 2));
+    // Atomic write: never leave a half-written session file that would brick
+    // the service on the next start (write to temp, then rename).
+    const tmp = `${this.sessionFile}.tmp`;
+    await fsp.writeFile(tmp, JSON.stringify(this.session, null, 2));
+    await fsp.rename(tmp, this.sessionFile);
+  }
+
+  /**
+   * Keep the refresh-token chain warm so it never lapses into an inactivity
+   * timeout while the service is idle. Refreshes shortly before each expiry.
+   * Returns a stop() function. Call once at server startup.
+   */
+  startKeepAlive({ onError } = {}) {
+    const tick = async () => {
+      try {
+        if (this.isExpired()) await this.refresh();
+      } catch (e) {
+        if (onError) onError(e);
+        else console.error('[session] keep-alive refresh failed:', e.message);
+      } finally {
+        // Re-arm ~1 min before the current token expires (min 5 min, max 55).
+        const s = this.session || {};
+        const now = Math.floor(Date.now() / 1000);
+        const secs = Math.max(300, Math.min(3300, (s.expires_at || now + 3600) - now - 60));
+        this._keepAliveTimer = setTimeout(tick, secs * 1000);
+        this._keepAliveTimer.unref?.();
+      }
+    };
+    this.ensureLoaded();
+    tick();
+    return () => clearTimeout(this._keepAliveTimer);
   }
 
   isExpired() {

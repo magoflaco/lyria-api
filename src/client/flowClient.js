@@ -73,10 +73,30 @@ export class FlowClient {
    * generated clips. `conversation_id` is optional; when omitted the backend
    * starts a fresh conversation.
    */
-  async sendMessage(prompt, { conversationId, modelName, mode, clientContext = {} } = {}) {
+  async sendMessage(prompt, { conversationId, currentSongId, modelName, mode, clientContext = {}, parts, uploads } = {}) {
+    const context = { ...clientContext };
+    if (currentSongId) context.current_song_id = currentSongId;
+
+    // Multimodal: attach uploaded audio/image references as extra content items
+    // in the user-prompt part. Each upload: { kind:"image-url"|"audio-url", url,
+    // media_type, name, duration_s? }.
+    let defaultParts;
+    if (uploads && uploads.length) {
+      const content = [prompt, ...uploads.map((u) => ({
+        kind: u.kind,
+        url: u.url,
+        media_type: u.media_type,
+        name: u.name,
+        ...(u.duration_s != null ? { duration_s: u.duration_s } : {}),
+      }))];
+      defaultParts = [{ content, part_kind: 'user-prompt' }];
+    } else {
+      defaultParts = [{ content: prompt, part_kind: 'user-prompt' }];
+    }
+
     const body = {
-      parts: [{ content: prompt, part_kind: 'user-prompt' }],
-      client_context: clientContext,
+      parts: parts || defaultParts,
+      client_context: context,
     };
     if (conversationId) body.conversation_id = conversationId;
     if (modelName) body.model_name = modelName;
@@ -104,5 +124,58 @@ export class FlowClient {
   async getClip(clipId) {
     const clips = await this.getClips([clipId]);
     return clips[clipId] || null;
+  }
+
+  /**
+   * Server-side transcoded audio download. Works for mp3/wav/m4a and returns a
+   * fetch Response streaming the audio bytes. Needed for mp3 (not on GCS).
+   */
+  async downloadAudio(clipId, format = 'mp3') {
+    return this._request('GET', `/download/audio/${encodeURIComponent(clipId)}?format=${encodeURIComponent(format)}`);
+  }
+
+  // --- uploads (multipart) --------------------------------------------------
+
+  async _multipart(path, form) {
+    const token = await this.session.getAccessToken();
+    const res = await fetch(`${this.apiBase}${path}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'user-agent': this.userAgent,
+        origin: 'https://www.flowmusic.app',
+        referer: 'https://www.flowmusic.app/',
+      }, // NB: let fetch set the multipart content-type + boundary
+      body: form,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Flow API POST ${path} failed (${res.status}): ${text.slice(0, 300)}`);
+    }
+    return res.json();
+  }
+
+  /**
+   * Upload an image (or any file) to use as inspiration in a generation.
+   * `file_type` is the file's MIME type. Returns { id, url }.
+   */
+  async uploadImage(data, { filename = 'image.png', type = 'image/png' } = {}) {
+    const form = new FormData();
+    form.append('file', new Blob([data], { type }), filename);
+    form.append('file_type', type);
+    return this._multipart('/producer/upload', form);
+  }
+
+  /**
+   * Upload an audio file to build from (must be under 4 minutes).
+   * Returns the upload descriptor (id + url) the Producer can reference.
+   */
+  async uploadAudio(data, { filename = 'audio.mp3', type = 'audio/mpeg', checkVocals = false } = {}) {
+    const form = new FormData();
+    form.append('file', new Blob([data], { type }), filename);
+    form.append('file_type', type);
+    form.append('filename', filename);
+    form.append('check_vocals', String(checkVocals));
+    return this._multipart('/producer/upload-audio', form);
   }
 }
