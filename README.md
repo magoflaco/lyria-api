@@ -119,31 +119,46 @@ npm start        # listens on PORT (default 8787)
 | `POST /upload/image` | multipart field `image` | `{ id, url, kind, media_type, name }` |
 | `POST /upload/audio` | multipart field `audio` | `{ id, url, kind, media_type, name }` |
 
-**`/generate` and `/edit` return the audio directly to the caller:**
+**`/generate` and `/edit` return JSON describing the clip(s).** The Producer may
+make several variations; each is a **separate file** with its own `download_url`.
+Fetch each one independently — no zips, no multipart.
+
 - `format` is `mp3 | wav | m4a`; if omitted it defaults to `DEFAULT_FORMAT` (wav).
-- **1 clip →** the audio file itself (`Content-Type: audio/*`, `Content-Disposition: attachment`).
-- **N clips** (the Producer sometimes makes several variations) **→** a `multipart/mixed`
-  response with one audio file per variation.
-- The `conversation_id`, clip ids and title come back in the `X-Conversation-Id`,
-  `X-Clip-Ids` and `X-Title` response headers, so you can keep editing.
+  `download_url` points at that format; `download.{mp3,m4a,wav}` has all three.
+- Reuse `conversation_id` + a clip's `id` to keep editing.
+
+```jsonc
+// POST /generate {"prompt":"…","format":"mp3"}
+{
+  "title": "80 BPM Acoustic Sketch",
+  "conversation_id": "0d144b0b-…",
+  "count": 2,
+  "clips": [
+    { "id": "6e5d1c60-…", "title": "Acoustic Sketch 2", "duration_seconds": 103,
+      "download_url": "http://HOST/clips/6e5d1c60-…/audio?format=mp3",
+      "download": { "mp3": "…", "m4a": "…", "wav": "…" } },
+    { "id": "d798bf06-…", "title": "Acoustic Sketch 1", "duration_seconds": 106,
+      "download_url": "http://HOST/clips/d798bf06-…/audio?format=mp3", "download": { … } }
+  ]
+}
+```
 
 `operation` ∈ `variation | extend | remix | cover` (optionally refined with a
 `prompt`), or omit `operation` and pass a free-form `prompt` for any tweak.
 
-**Generate (save the song):**
+**Generate, then download every variation as its own file:**
 ```bash
-curl -X POST http://localhost:8787/generate \
-  -H 'content-type: application/json' \
-  -d '{"prompt":"funky disco groove, wah guitar, 118 bpm, instrumental","format":"mp3"}' \
-  -OJ   # -OJ makes curl honor the attachment filename
+curl -s -X POST http://localhost:8787/generate -H 'content-type: application/json' \
+  -d '{"prompt":"funky disco groove, wah guitar, 118 bpm","format":"mp3"}' \
+| jq -r '.clips[].download_url' \
+| xargs -n1 curl -s -OJ      # -OJ keeps each clip's own filename
 ```
 
 **Edit (remix) — reuse the conversation id from a previous call:**
 ```bash
-curl -X POST http://localhost:8787/edit \
-  -H 'content-type: application/json' \
+curl -s -X POST http://localhost:8787/edit -H 'content-type: application/json' \
   -d '{"conversation_id":"…","current_song_id":"…","operation":"remix","prompt":"drum and bass","format":"wav"}' \
-  -OJ
+| jq -r '.clips[].download_url' | xargs -n1 curl -s -OJ
 ```
 
 **Build from an uploaded image (inspiration):**
@@ -151,8 +166,8 @@ curl -X POST http://localhost:8787/edit \
 # 1) upload -> get a reference
 REF=$(curl -s -X POST http://localhost:8787/upload/image -F image=@cover.jpg)
 # 2) pass it in `uploads`
-curl -X POST http://localhost:8787/generate -H 'content-type: application/json' \
-  -d "{\"prompt\":\"a track inspired by this image\",\"uploads\":[$REF],\"format\":\"mp3\"}" -OJ
+curl -s -X POST http://localhost:8787/generate -H 'content-type: application/json' \
+  -d "{\"prompt\":\"a track inspired by this image\",\"uploads\":[$REF],\"format\":\"mp3\"}"
 ```
 Audio works the same way via `POST /upload/audio` (source clip must be under ~4 min).
 
