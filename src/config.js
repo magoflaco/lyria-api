@@ -1,9 +1,20 @@
 // Central configuration. Reads environment variables with sane defaults.
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
+
+// Load a local .env if present (Node >=20.12). No external dependency.
+try {
+  const envPath = path.resolve(root, '.env');
+  if (typeof process.loadEnvFile === 'function' && fs.existsSync(envPath)) {
+    process.loadEnvFile(envPath);
+  }
+} catch {
+  /* ignore — env vars can still be provided by the process manager */
+}
 
 const resolve = (p) => (path.isAbsolute(p) ? p : path.resolve(root, p));
 
