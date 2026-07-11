@@ -1,6 +1,8 @@
 node_modules/
 secrets/
 downloads/
+DEPLOY.md
+*.apikey
 *.log
 .env
 .DS_Store
